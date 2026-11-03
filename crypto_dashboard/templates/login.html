@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connexion · Atlas Crypto</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <a class="brand" href="{{ url_for('login') }}"><span class="brand-mark">A</span><span>atlas<span class="brand-light">crypto</span></span></a>
+    <p class="eyebrow">ESPACE PRIVÉ</p>
+    <h1>Votre patrimoine,<br>en toute clarté.</h1>
+    <p class="muted">Connectez-vous à votre tableau de bord personnel.</p>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" class="login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="password">Mot de passe</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <button class="button button-primary button-wide" type="submit">Accéder au tableau de bord <span>→</span></button>
+    </form>
+    <p class="login-footnote">Application privée · Vos clés API ne quittent jamais le serveur.</p>
+  </main>
+</body>
+</html>

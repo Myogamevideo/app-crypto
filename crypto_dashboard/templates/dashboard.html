@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="fr">
+{% macro line_chart(chart, description) -%}
+  {% if chart %}
+  <svg class="chart-svg" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-label="{{ description }}">
+    <title>{{ description }}</title>
+    {% for tick in chart.y_ticks %}
+      <line class="chart-gridline" x1="{{ chart.left }}" x2="{{ chart.right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"></line>
+      <text class="chart-axis-label" x="{{ chart.left - 8 }}" y="{{ tick.y + 3 }}" text-anchor="end">{{ tick.label }}</text>
+    {% endfor %}
+    {% for tick in chart.x_ticks %}
+      <text class="chart-axis-label" x="{{ tick.x }}" y="{{ chart.height - 8 }}" text-anchor="middle">{{ tick.label }}</text>
+    {% endfor %}
+    {% for series in chart.paths %}
+      {% if series.path %}<path class="chart-line" d="{{ series.path }}" stroke="{{ series.color }}"></path>{% endif %}
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="chart-empty">Aucune période complète avec des cours EUR disponibles.</p>
+  {% endif %}
+{%- endmacro %}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Portefeuille · Atlas Crypto</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Aller au contenu</a>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">A</span><span>atlas<span class="brand-light">crypto</span></span></a>
+      <div class="sidebar-label">ESPACE PERSONNEL</div>
+      <nav class="side-nav" aria-label="Navigation principale">
+        <a class="nav-item active" href="#overview"><span class="nav-icon">◫</span> Vue d’ensemble</a>
+        <a class="nav-item" href="#holdings"><span class="nav-icon">◈</span> Portefeuille</a>
+        {% if connected %}<a class="nav-item" href="#charts"><span class="nav-icon">⌁</span> Analyses</a>{% endif %}
+        {% if connected %}<a class="nav-item" href="#quality"><span class="nav-icon">!</span> Qualité</a>{% endif %}
+        <a class="nav-item" href="#transactions"><span class="nav-icon">⇄</span> Transactions</a>
+        <a class="nav-item" href="#tax"><span class="nav-icon">▤</span> Fiscalité France</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="privacy-card"><span class="privacy-icon">⌑</span><div><strong>Vos données restent privées</strong><small>Stockées sur votre serveur.</small></div></div>
+        <form action="{{ url_for('logout') }}" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="logout-button" type="submit"><span>↪</span> Déconnexion</button>
+        </form>
+        <span class="version-label">ATLAS CRYPTO · PERSONNEL</span>
+      </div>
+    </aside>
+    <main class="main-content" id="main-content" tabindex="-1">
+      <header class="topbar">
+        <div class="breadcrumb">TABLEAU DE BORD <span>/</span> <b>PORTEFEUILLE</b></div>
+        <div class="topbar-actions">
+          <span class="sync-state {% if sync_error %}state-error{% elif last_sync %}state-ok{% endif %}">
+            <i></i>
+            {% if sync_error %}Synchronisation à vérifier{% elif last_sync %}Synchronisé{% else %}En attente de synchronisation{% endif %}
+          </span>
+          <button class="button button-outline" id="sync-button" {% if not connected %}disabled{% endif %}>
+            <span class="sync-icon">↻</span> Synchroniser
+          </button>
+          <div class="avatar">P</div>
+        </div>
+      </header>
+      <div class="page-content">
+        <section class="page-heading" id="overview">
+          <div>
+            <p class="eyebrow">VOTRE PATRIMOINE NUMÉRIQUE</p>
+            <h1>Vue d’ensemble <span class="heading-dot">.</span></h1>
+            <p class="muted">Un suivi clair de vos actifs et de leurs performances.</p>
+          </div>
+          <label class="date-picker">À LA DATE DU <input type="date" id="as-of-date" max="{{ current_date }}" value="{{ dashboard_data.as_of if dashboard_data else current_date }}"></label>
+        </section>
+
+        {% if sync_error %}<div class="notice notice-error" role="alert"><strong>Synchronisation impossible.</strong> {{ sync_error }}</div>{% endif %}
+        {% if not connected %}
+          <section class="notice notice-warn setup-notice">
+            <div class="notice-icon">⌑</div>
+            <div><strong>Connectez votre compte Coinbase</strong><p>Ajoutez une clé API CDP en lecture seule dans le fichier <code>.env</code>, puis relancez l’application.</p><span>Autorisations nécessaires : accès en lecture aux comptes et transactions. Aucune permission de trading ou de transfert.</span></div>
+          </section>
+        {% elif not transactions %}
+          <section class="notice notice-warn">
+            <div class="notice-icon">↻</div>
+            <div><strong>Prêt à importer vos opérations</strong><p>La clé est configurée. Lancez une synchronisation pour récupérer votre historique Coinbase.</p></div>
+          </section>
+        {% endif %}
+        {% if dashboard_data and dashboard_data.warnings %}
+          <div class="notice notice-warn" role="status"><div class="notice-icon">!</div><div><strong>Indicateurs à vérifier</strong><p>{{ dashboard_data.warnings|join(" ") }}</p>{% if dashboard_data.quality_report.count %}<a class="quality-jump" href="#quality">Voir les opérations et informations à vérifier</a>{% endif %}</div></div>
+        {% endif %}
+
+        {% set assets = dashboard_data.assets if dashboard_data else [] %}
+        {% if dashboard_data %}
+        {% if dashboard_data.balance_reconciliation %}
+        <section class="panel reconciliation-panel" id="reconciliation">
+          <div class="panel-heading">
+            <div><p class="eyebrow">CONTRÔLE DES SOLDES EN DIRECT</p><h2>Rapprochement Coinbase <span class="count-pill">{{ dashboard_data.balance_reconciliation|length }}</span></h2></div>
+            <span class="panel-subtitle">Dernière capture{% if dashboard_data.account_balances_at %} · {{ dashboard_data.account_balances_at[:16]|replace("T", " ") }}{% else %} indisponible{% endif %}</span>
+          </div>
+          <p class="quality-intro">Le registre est comparé aux soldes Coinbase pour la date du jour. Un rapprochement aligne les quantités, mais ne reconstitue pas le coût d’acquisition manquant.</p>
+          <div class="reconciliation-list">
+            {% for item in dashboard_data.balance_reconciliation %}
+            <article class="reconciliation-card">
+              <div class="reconciliation-card-heading">
+                <strong>{{ item.asset }}</strong>
+                <span class="reconciliation-status {% if item.status == 'Aligné' %}status-ok{% elif item.status == 'Écart mineur' %}status-minor{% else %}status-warn{% endif %}">{{ item.status }}</span>
+              </div>
+              <dl class="reconciliation-values">
+                <div><dt>Solde Coinbase</dt><dd>{{ item.coinbase_quantity|quantity }}</dd></div>
+                <div><dt>Registre</dt><dd>{{ item.ledger_quantity|quantity }}</dd></div>
+                <div><dt>Écart (Coinbase − registre)</dt><dd>{{ item.difference|quantity }}</dd></div>
+                <div><dt>Valeur de l’écart</dt><dd>{{ item.difference_value_eur|money if item.difference_value_eur is not none else "Inconnue" }}</dd></div>
+                <div><dt>État du PRU</dt><dd>{{ item.basis_status }}</dd></div>
+              </dl>
+              <div class="reconciliation-last">
+                <span>Dernière opération{% if item.last_transaction_date %} · {{ item.last_transaction_date[:10] }} · {{ item.last_transaction_type }}{% else %} · aucune importée{% endif %}</span>
+                {% if item.last_transaction_id %}
+                <a href="{{ url_for('dashboard', date=dashboard_data.as_of, q=item.last_transaction_id) }}#transactions" title="Rechercher cette transaction dans l’historique">Voir l’opération</a>
+                {% endif %}
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+        {% endif %}
+        <section class="panel quality-panel" id="quality">
+          <div class="panel-heading">
+            <div><p class="eyebrow">CONTRÔLE DE L’HISTORIQUE</p><h2>Qualité des données <span class="count-pill">{{ dashboard_data.quality_report.count }}</span></h2></div>
+            <span class="panel-subtitle">{% if dashboard_data.quality_report.count %}Opérations et cours à vérifier{% else %}Aucune anomalie détectée{% endif %}</span>
+          </div>
+          {% if dashboard_data.quality_report.count %}
+          <p class="quality-intro">Ces points peuvent rendre le PRU ou les performances incomplets. Une anomalie ne signifie pas forcément que la transaction Coinbase est erronée.</p>
+          <div class="quality-list">
+            {% for issue in dashboard_data.quality_report["items"] %}
+            <article class="quality-item">
+              <div class="quality-item-heading">
+                <span class="quality-kind">{{ issue.kind }}</span>
+                <span class="quality-date">{{ issue.date or "Date inconnue" }}</span>
+              </div>
+              <div class="quality-asset">{{ issue.asset or "Compte" }}</div>
+              <p class="quality-problem">{{ issue.problem }}</p>
+              <p class="quality-recommendation">{{ issue.recommendation }}</p>
+              {% if issue.transaction_ids %}
+              <div class="quality-transactions">
+                <span>Transactions liées</span>
+                {% for transaction_id in issue.transaction_ids %}
+                <a href="{{ url_for('dashboard', date=dashboard_data.as_of, q=transaction_id) }}#transactions" title="Rechercher cette transaction dans l’historique">{{ transaction_id }}</a>
+                {% endfor %}
+              </div>
+              {% elif issue.transaction_id %}
+              <div class="quality-transactions">
+                <span>Transaction liée</span>
+                <a href="{{ url_for('dashboard', date=dashboard_data.as_of, q=issue.transaction_id) }}#transactions" title="Rechercher cette transaction dans l’historique">{{ issue.transaction_id }}</a>
+              </div>
+              {% endif %}
+            </article>
+            {% endfor %}
+          </div>
+          {% if dashboard_data.quality_report.truncated %}<p class="quality-truncated">Affichage limité aux 100 premiers éléments. Utilisez les filtres de l’historique pour examiner les autres transactions.</p>{% endif %}
+          {% else %}
+          <p class="quality-intro">Les opérations importées et les cours consultés ne présentent pas de point à vérifier pour cette date.</p>
+          {% endif %}
+        </section>
+        {% endif %}
+        <section class="summary-grid">
+          <article class="summary-card summary-primary">
+            <div class="card-top"><span>VALEUR DU PORTEFEUILLE</span><span class="card-symbol">◈</span></div>
+            <div class="summary-value">{{ dashboard_data.total_value_eur|money if dashboard_data and dashboard_data.total_value_eur is not none else "—" }}</div>
+            <div class="summary-caption">Valorisation au {{ dashboard_data.as_of if dashboard_data else "—" }}</div>
+            {% if dashboard_data and dashboard_data.account_balances %}
+            <div class="summary-caption account-balance-caption">
+              Soldes Coinbase{% if dashboard_data.account_balances_at %} · {{ dashboard_data.account_balances_at[:16]|replace("T", " ") }}{% endif %} :
+              EUR {{ dashboard_data.account_balances.get("EUR", "0")|quantity }},
+              EURC {{ dashboard_data.account_balances.get("EURC", "0")|quantity }},
+              USDC {{ dashboard_data.account_balances.get("USDC", "0")|quantity }}
+            </div>
+            {% endif %}
+          </article>
+          <article class="summary-card">
+            <div class="card-top"><span>INVESTISSEMENT NET</span><span class="card-symbol">↗</span></div>
+            <div class="summary-value">{{ dashboard_data.total_invested_eur|money if dashboard_data else "—" }}</div>
+            <div class="summary-caption">Base de coût estimée en EUR</div>
+          </article>
+          <article class="summary-card">
+            <div class="card-top"><span>GAIN / PERTE RÉALISÉ(E)</span><span class="card-symbol">⌁</span></div>
+            <div class="summary-value {% if dashboard_data and dashboard_data.total_realized_eur is not none %}{% if dashboard_data.total_realized_eur < 0 %}negative{% else %}positive{% endif %}{% endif %}">{{ dashboard_data.total_realized_eur|money if dashboard_data else "—" }}</div>
+            <div class="summary-caption">Sur les ventes et trades catégorisés</div>
+          </article>
+          <article class="summary-card">
+            <div class="card-top"><span>GAIN / PERTE LATENT(E)</span><span class="card-symbol">◎</span></div>
+            <div class="summary-value">{{ dashboard_data.total_unrealized_eur|money if dashboard_data and dashboard_data.total_unrealized_eur is not none else "—" }}</div>
+            <div class="summary-caption">Valorisation moins PRU restant</div>
+          </article>
+        </section>
+
+        {% if dashboard_data %}
+        {% set charts = dashboard_data.charts %}
+        <section class="panel insights-panel" id="charts">
+          <div class="panel-heading">
+            <div><p class="eyebrow">ANALYSE DU PORTEFEUILLE</p><h2>Évolution et performance</h2></div>
+            <span class="panel-subtitle">Estimations EUR · {{ dashboard_data.as_of }}</span>
+          </div>
+          {% if charts %}
+          <div class="insight-metrics">
+            <article class="insight-metric">
+              <span>VALEUR AVEC PRU CONNU</span>
+              <strong>{{ charts.basis_coverage_percent|percent if charts.basis_coverage_percent is not none else "—" }}</strong>
+              <small>Part de la valeur actuelle dont la base de coût est reconstituée.</small>
+            </article>
+            <article class="insight-metric">
+              <span>VALEUR ACTUELLE SANS PRU FIABLE</span>
+              <strong>{{ charts.unknown_basis_value_eur|money if charts.unknown_basis_value_eur is not none else "—" }}</strong>
+              <small>Exposition valorisée, pas le coût d’acquisition manquant.</small>
+            </article>
+          </div>
+          <div class="period-performance">
+            <div class="period-heading"><strong>Variation estimée du résultat</strong><span>Réalisé + latent · évolution en EUR, pas un rendement annualisé</span></div>
+            <div class="period-metrics">
+              {% for period in charts.performance_periods %}
+              <article class="period-metric">
+                <span>{{ period.label }}</span>
+                <strong class="{% if period.value_eur is not none %}{% if period.value_eur < 0 %}negative{% else %}positive{% endif %}{% endif %}">{{ period.value_eur|money if period.value_eur is not none else "—" }}</strong>
+              </article>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="chart-grid">
+            <article class="chart-card">
+              <div class="chart-heading"><div><h3>Valeur du portefeuille</h3><p>12 derniers mois · estimations de fin de mois</p></div></div>
+              {{ line_chart(charts.value_chart, "Évolution mensuelle de la valeur estimée du portefeuille en euros") }}
+            </article>
+            <article class="chart-card">
+              <div class="chart-heading"><div><h3>Répartition par crypto</h3><p>{% if charts.allocation_complete %}Part de la valeur estimée{% else %}Cours disponibles uniquement · répartition partielle{% endif %}</p></div></div>
+              {% if charts.allocation %}
+              <div class="allocation-list">
+                {% for asset in charts.allocation %}
+                <div class="allocation-row">
+                  <span class="allocation-asset">{{ asset.asset }}</span>
+                  <progress class="allocation-progress" value="{{ asset.bar_percent }}" max="100" aria-label="Valeur relative de {{ asset.asset }}"></progress>
+                  <span class="allocation-value">{{ asset.value_eur|money }}</span>
+                  <span class="allocation-share">{{ asset.share_percent|percent if asset.share_percent is not none else "—" }}</span>
+                </div>
+                {% endfor %}
+              </div>
+              {% else %}<p class="chart-empty">Aucun cours disponible pour cette date.</p>{% endif %}
+            </article>
+            <article class="chart-card">
+              <div class="chart-heading">
+                <div><h3>Achats et ventes par mois</h3><p>Valeurs des jambes crypto catégorisées</p></div>
+                <div class="chart-legend"><span><i class="legend-buy"></i> Achats</span><span><i class="legend-sell"></i> Ventes</span></div>
+              </div>
+              {% if charts.flow_chart %}
+              <svg class="chart-svg" viewBox="0 0 {{ charts.flow_chart.width }} {{ charts.flow_chart.height }}" role="img" aria-label="Achats et ventes crypto mensuels en euros">
+                <title>Achats et ventes crypto par mois</title>
+                {% for tick in charts.flow_chart.y_ticks %}
+                  <line class="chart-gridline" x1="{{ charts.flow_chart.left }}" x2="{{ charts.flow_chart.right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"></line>
+                  <text class="chart-axis-label" x="{{ charts.flow_chart.left - 8 }}" y="{{ tick.y + 3 }}" text-anchor="end">{{ tick.label }}</text>
+                {% endfor %}
+                {% for tick in charts.flow_chart.x_ticks %}
+                  <text class="chart-axis-label" x="{{ tick.x }}" y="{{ charts.flow_chart.height - 8 }}" text-anchor="middle">{{ tick.label }}</text>
+                {% endfor %}
+                <line class="chart-baseline" x1="{{ charts.flow_chart.left }}" x2="{{ charts.flow_chart.right }}" y1="{{ charts.flow_chart.baseline }}" y2="{{ charts.flow_chart.baseline }}"></line>
+                {% for bar in charts.flow_chart.bars %}
+                  <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" fill="{{ bar.color }}" rx="1"></rect>
+                {% endfor %}
+              </svg>
+              {% else %}<p class="chart-empty">Aucun achat ou vente catégorisé sur la période.</p>{% endif %}
+            </article>
+            <article class="chart-card">
+              <div class="chart-heading">
+                <div><h3>Gains réalisés et latents</h3><p>Résultat cumulé estimé en fin de mois</p></div>
+                <div class="chart-legend"><span><i class="legend-realized"></i> Réalisé</span><span><i class="legend-unrealized"></i> Non réalisé</span></div>
+              </div>
+              {{ line_chart(charts.gains_chart, "Évolution des gains et pertes réalisés et non réalisés en euros") }}
+            </article>
+          </div>
+          {% if charts.history_price_incomplete or not charts.allocation_complete %}
+          <p class="chart-warning" role="status">Certains cours historiques ou actuels sont indisponibles : les courbes et la répartition peuvent être partielles.</p>
+          {% endif %}
+          <p class="chart-footnote">Courbe sur 12 mois. Les indicateurs portent sur les transactions importées. Les variations ne sont pas un rendement fiscal ou annualisé; elles sont masquées lorsque les bases de coût ou les valorisations nécessaires sont inconnues.</p>
+          {% else %}
+          <p class="chart-empty insights-empty">Synchronisez Coinbase pour afficher les graphiques et indicateurs du portefeuille.</p>
+          {% endif %}
+        </section>
+
+        {% set report = dashboard_data.activity_report %}
+        <section class="panel" id="annual-report">
+          <div class="panel-heading">
+            <div><p class="eyebrow">SYNTHÈSE DES FLUX ET RÉSULTATS</p><h2>Activité par année</h2></div>
+            <span class="panel-subtitle">Jusqu’au {{ dashboard_data.as_of }}</span>
+          </div>
+          <div class="table-wrap annual-report-wrap">
+            <table class="transactions-table annual-report-table">
+              <thead><tr><th>GLOBAL RÉALISÉ</th><th>{{ report.all_time_label }}</th>{% for year in report.years %}<th>{{ year }}</th>{% endfor %}</tr></thead>
+              <tbody>
+              {% for row in report.value_rows %}
+                <tr class="{% if row.label == 'Total' or row.label == 'P/G' or row.label == '%' %}report-emphasis{% endif %}">
+                  <th scope="row">{{ row.label }}</th>
+                  {% for value in row["values"] %}<td>{% if row.label == '%' %}{{ value|percent }}{% else %}{{ value|money if value is not none else "—" }}{% endif %}</td>{% endfor %}
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="mobile-report-cards">
+            {% for period_index in range(report.years|length + 1) %}
+            <article class="report-card">
+              <h3>{{ report.all_time_label if period_index == 0 else report.years[period_index - 1] }}</h3>
+              {% for row in report.value_rows %}
+              <div class="report-card-row {% if row.label in ['Total', 'P/G', '%'] %}report-card-emphasis{% endif %}">
+                <span>{{ row.label }}</span>
+                <strong>{% set value = row["values"][period_index] %}{% if row.label == '%' %}{{ value|percent }}{% else %}{{ value|money if value is not none else "—" }}{% endif %}</strong>
+              </div>
+              {% endfor %}
+            </article>
+            {% endfor %}
+          </div>
+          <p class="table-footnote">Les achats/ventes sont calculés sur la jambe crypto de chaque trade. Les gains de pari recatégorisés sont valorisés au cours EUR du jour et ajoutés à la base du PRU; ils ne sont pas une plus-value de vente. P/G réalisée utilise le PRU moyen des bases connues. Le % est P/G réalisée ÷ dépôts EUR nets (pas un rendement annualisé). « — » signifie que le calcul est incomplet ou que les dépôts nets sont nuls.</p>
+          <div class="table-wrap annual-report-wrap annual-count-wrap">
+            <table class="transactions-table annual-report-table">
+              <thead><tr><th>NOMBRE D’OPÉRATIONS</th><th>{{ report.all_time_label }}</th>{% for year in report.years %}<th>{{ year }}</th>{% endfor %}</tr></thead>
+              <tbody>
+              {% for row in report.count_rows %}
+                <tr><th scope="row">{{ row.label }}</th>{% for value in row["values"] %}<td>{{ value }}</td>{% endfor %}</tr>
+              {% endfor %}
+                <tr class="report-emphasis"><th scope="row">Nombre de lignes</th>{% for value in report.line_count_values %}<td>{{ value }}</td>{% endfor %}</tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="mobile-report-cards">
+            {% for period_index in range(report.years|length + 1) %}
+            <article class="report-card">
+              <h3>{{ report.all_time_label if period_index == 0 else report.years[period_index - 1] }}</h3>
+              {% for row in report.count_rows %}
+              <div class="report-card-row"><span>{{ row.label }}</span><strong>{{ row["values"][period_index] }}</strong></div>
+              {% endfor %}
+              <div class="report-card-row report-card-emphasis"><span>Nombre de lignes</span><strong>{{ report.line_count_values[period_index] }}</strong></div>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="panel" id="flows-summary">
+          <div class="panel-heading">
+            <div><p class="eyebrow">LECTURE DES FLUX</p><h2>Trading et mouvements externes</h2></div>
+          </div>
+          <div class="summary-grid flow-summary-grid">
+            <article class="summary-card"><div class="card-top"><span>ACHATS CRYPTO</span></div><div class="summary-value">{{ report.summary.buy|money if report.summary.buy is not none else "—" }}</div><div class="summary-caption">Jambes crypto des trades BUY</div></article>
+            <article class="summary-card"><div class="card-top"><span>VENTES CRYPTO</span></div><div class="summary-value">{{ (report.summary.sell * -1)|money if report.summary.sell is not none else "—" }}</div><div class="summary-caption">Jambes crypto des trades SELL</div></article>
+            <article class="summary-card"><div class="card-top"><span>ÉCART BRUT VENTES / ACHATS</span></div><div class="summary-value">{{ (report.summary.buy + report.summary.sell)|money if report.summary.buy is not none and report.summary.sell is not none else "—" }}</div><div class="summary-caption">Flux de trésorerie, pas une plus-value réalisée</div></article>
+            <article class="summary-card"><div class="card-top"><span>ENVOIS CRYPTO</span></div><div class="summary-value">{{ (report.summary.send * -1)|money if report.summary.send is not none else "—" }}</div><div class="summary-caption">Valeur EUR indicative des actifs envoyés</div></article>
+            <article class="summary-card"><div class="card-top"><span>RÉCEPTIONS CRYPTO</span></div><div class="summary-value">{{ report.summary.received|money if report.summary.received is not none else "—" }}</div><div class="summary-caption">Valeur EUR indicative des actifs reçus</div></article>
+            <article class="summary-card"><div class="card-top"><span>ÉCART NET DES TRANSFERTS</span></div><div class="summary-value">{{ (report.summary.received + report.summary.send)|money if report.summary.received is not none and report.summary.send is not none else "—" }}</div><div class="summary-caption">Ne constitue pas un gain/perte : provenance et base fiscale externes à vérifier</div></article>
+            <article class="summary-card"><div class="card-top"><span>PERFORMANCE TOTALE ESTIMÉE</span></div><div class="summary-value">{{ (dashboard_data.total_realized_eur + dashboard_data.total_unrealized_eur)|money if dashboard_data.total_realized_eur is not none and dashboard_data.total_unrealized_eur is not none else "—" }}</div><div class="summary-caption">Réalisée + latente ; indisponible si PRU ou cours manquant</div></article>
+          </div>
+        </section>
+        {% endif %}
+
+        <section class="panel" id="holdings">
+          <div class="panel-heading">
+            <div><p class="eyebrow">SUIVI AU PRU MOYEN</p><h2>Vos actifs <span class="count-pill">{{ assets|length }}</span></h2></div>
+            <div class="panel-tools"><span class="period-chip">EUR · {{ dashboard_data.as_of if dashboard_data else "—" }}</span></div>
+          </div>
+          <div class="mobile-holdings">
+            {% for asset in assets %}
+            <article class="asset-card">
+              <div class="asset-card-heading">
+                <span class="asset-name"><span class="coin-icon">{{ asset.asset[:1] }}</span><b>{{ asset.asset }}</b></span>
+                <strong>{{ asset.value_eur|money if asset.value_eur is not none else "—" }}</strong>
+              </div>
+              <div class="asset-card-primary">
+                <div><span>Quantité</span><strong>{{ asset.quantity|quantity }}</strong></div>
+                <div><span>PRU</span><strong>{{ asset.average_cost|money if asset.average_cost is not none else "Inconnu" }}</strong></div>
+              </div>
+              <div class="asset-card-results">
+                <div><span>G/P réalisée</span><strong class="{% if asset.realized is not none and asset.realized < 0 %}negative{% elif asset.realized is not none %}positive{% endif %}">{{ asset.realized|money }}</strong></div>
+                <div><span>G/P latente</span><strong class="{% if asset.unrealized is not none and asset.unrealized < 0 %}negative{% elif asset.unrealized is not none %}positive{% endif %}">{{ asset.unrealized|money if asset.unrealized is not none else "—" }}</strong></div>
+              </div>
+              <details class="asset-card-details">
+                <summary>Détail des flux</summary>
+                <dl>
+                  <div><dt>Prix actuel</dt><dd>{{ asset.price_eur|money if asset.price_eur is not none else "—" }}</dd></div>
+                  <div><dt>Achats</dt><dd>{{ asset.buy_qty|quantity }} · {{ asset.buy_eur|money }}</dd></div>
+                  <div><dt>Ventes</dt><dd>{{ asset.sell_qty|quantity }} · {{ asset.sell_eur|money }}</dd></div>
+                  <div><dt>Reçus</dt><dd>{{ asset.received_qty|quantity }} · {{ asset.received_eur|money }}</dd></div>
+                  <div><dt>Envoyés</dt><dd>{{ asset.sent_qty|quantity }} · {{ asset.sent_eur|money }}</dd></div>
+                  <div><dt>Trade interne</dt><dd>{{ asset.trade_eur|money }}</dd></div>
+                  <div><dt>Investissement externe</dt><dd>{{ asset.invest_ext|money }}</dd></div>
+                  <div><dt>Base de coût connue</dt><dd>{{ asset.basis|money if asset.basis_known else "Incomplète" }}</dd></div>
+                </dl>
+              </details>
+            </article>
+            {% else %}
+            <p class="chart-empty">{% if connected %}Aucun actif synchronisé pour cette date.{% else %}Configurez Coinbase pour afficher vos actifs.{% endif %}</p>
+            {% endfor %}
+          </div>
+          <div class="table-wrap">
+            <table class="holdings-table">
+              <thead><tr>
+                <th>PRIX</th><th>JETON-EUR</th><th>LIST CRYPTO</th><th>BUY JETON</th><th>BUY EUR</th>
+                <th>SELL JETON</th><th>SELL EUR</th><th>RECEIVED JETON</th><th>RECEIVED EUR</th>
+                <th>SEND JETON</th><th>SEND EUR</th><th>TRADE INT</th><th>INVEST EXT</th>
+                <th>JETON DISPONIBLE</th><th>VALEUR EUR</th><th>QUANTITÉ</th><th>TOTAL INVESTI</th>
+                <th>PRU</th><th>G/P RÉALISÉE</th><th>G/P EUR NON RÉALISÉE</th>
+              </tr></thead>
+              <tbody>
+              {% for asset in assets %}
+                <tr>
+                  <td>{{ asset.price_eur|money if asset.price_eur is not none else "—" }}</td>
+                  <td class="pair-cell">{{ asset.pair }}</td>
+                  <td><span class="asset-name"><span class="coin-icon">{{ asset.asset[:1] }}</span><b>{{ asset.asset }}</b></span></td>
+                  <td>{{ asset.buy_qty|quantity }}</td><td>{{ asset.buy_eur|money }}</td>
+                  <td>{{ asset.sell_qty|quantity }}</td><td>{{ asset.sell_eur|money }}</td>
+                  <td>{{ asset.received_qty|quantity }}</td><td>{{ asset.received_eur|money }}</td>
+                  <td>{{ asset.sent_qty|quantity }}</td><td>{{ asset.sent_eur|money }}</td>
+                  <td>{{ asset.trade_eur|money }}</td><td>{{ asset.invest_ext|money }}</td>
+                  <td>{{ asset.quantity|quantity }}</td><td>{{ asset.value_eur|money if asset.value_eur is not none else "—" }}</td>
+                  <td>{{ asset.quantity|quantity }}</td><td>{{ asset.basis|money }}</td>
+                  <td>{{ asset.average_cost|money if asset.average_cost is not none else "—" }}</td>
+                  <td class="{% if asset.realized is not none %}{% if asset.realized < 0 %}negative{% else %}positive{% endif %}{% endif %}">{{ asset.realized|money }}</td>
+                  <td class="{% if asset.unrealized is not none and asset.unrealized < 0 %}negative{% else %}positive{% endif %}">{{ asset.unrealized|money if asset.unrealized is not none else "—" }}</td>
+                </tr>
+              {% else %}
+                <tr><td class="empty-row" colspan="20">{% if connected %}Aucun actif synchronisé pour cette date.{% else %}Configurez Coinbase pour afficher vos actifs.{% endif %}</td></tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="table-footnote"><span>PRU = prix de revient unitaire moyen. Les montants non disponibles sont affichés « — ».</span><span>Les catégories peuvent être ajustées dans l’historique.</span></div>
+        </section>
+
+        <section class="panel" id="transactions">
+          <div class="panel-heading">
+            <div><p class="eyebrow">ACTIVITÉ DU COMPTE</p><h2>Historique des transactions</h2></div>
+            <span class="panel-subtitle">{{ transaction_count }} opération{% if transaction_count != 1 %}s{% endif %} · historique du {{ history_start or "—" }} au {{ history_end or "—" }}</span>
+          </div>
+          <form class="transaction-filters" method="get" action="{{ url_for('dashboard') }}#transactions">
+            <input type="hidden" name="date" value="{{ dashboard_data.as_of if dashboard_data else current_date }}">
+            <input type="hidden" name="sort" value="{{ filters.sort }}">
+            <input type="hidden" name="direction" value="{{ filters.direction }}">
+            <label class="filter-search">Recherche
+              <input type="search" name="q" value="{{ filters.q }}" placeholder="Actif, opération ou identifiant">
+            </label>
+            <label>Crypto
+              <input type="text" name="asset" value="{{ filters.asset }}" placeholder="BTC" maxlength="20">
+            </label>
+            <label>Catégorie
+              <select name="category"><option value="">Toutes</option>
+                {% for category in categories %}<option value="{{ category }}" {% if filters.category == category %}selected{% endif %}>{{ category }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Statut
+              <select name="status"><option value="">Tous</option>
+                {% for status in ["completed", "pending", "failed", "canceled"] %}<option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status|title }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Du <input type="date" name="from_date" value="{{ filters.from_date }}"></label>
+            <label>Au <input type="date" name="to_date" value="{{ filters.to_date }}"></label>
+            <label>Par page
+              <select name="per_page">{% for size in [25, 50, 100] %}<option value="{{ size }}" {% if filters.per_page == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select>
+            </label>
+            <button type="submit" class="button button-outline">Filtrer</button>
+            <a class="clear-filters" href="{{ clear_filters_url }}">Effacer</a>
+          </form>
+          <div class="mobile-transactions">
+            {% for tx in transactions %}
+            <article class="transaction-card">
+              <div class="transaction-card-top">
+                <span>{{ tx["created_at"][:10] }}</span>
+                <span class="status-chip">{{ tx["status"] }}</span>
+              </div>
+              <strong class="transaction-card-title">{{ tx["description"] or tx["type"]|replace("_", " ")|title }}</strong>
+              <div class="transaction-card-asset"><b>{{ tx["amount_currency"] }}</b><span>{{ tx["amount"]|quantity }}</span></div>
+              <div class="transaction-card-value"><span>Valeur EUR</span><strong>{{ tx["value_eur"]|money if tx["value_eur"] is not none else "—" }}</strong></div>
+              <label class="mobile-category">Catégorie
+                <select class="category-select" data-transaction-id="{{ tx['id'] }}">
+                  {% for category in categories %}<option value="{{ category }}" {% if category == tx["display_category"] %}selected{% endif %}>{{ category }}</option>{% endfor %}
+                </select>
+              </label>
+            </article>
+            {% else %}
+            <p class="chart-empty">Aucune opération ne correspond à ces filtres.</p>
+            {% endfor %}
+          </div>
+          <div class="table-wrap">
+            <table class="transactions-table">
+              <thead><tr>
+                <th><a href="{{ sort_urls.created_at }}">DATE{% if filters.sort == 'created_at' %} {{ '↑' if filters.direction == 'asc' else '↓' }}{% endif %}</a></th>
+                <th><a href="{{ sort_urls.type }}">OPÉRATION</a></th>
+                <th><a href="{{ sort_urls.amount_currency }}">ACTIF</a></th>
+                <th><a href="{{ sort_urls.amount }}">QUANTITÉ</a></th>
+                <th>VALEUR EUR</th>
+                <th><a href="{{ sort_urls.status }}">STATUT</a></th>
+                <th><a href="{{ sort_urls.category }}">CATÉGORIE</a></th>
+              </tr></thead>
+              <tbody>
+              {% for tx in transactions %}
+                <tr>
+                  <td>{{ tx["created_at"][:10] }}</td>
+                  <td>{{ tx["description"] or tx["type"]|replace("_", " ")|title }}</td>
+                  <td>{{ tx["amount_currency"] }}</td>
+                  <td>{{ tx["amount"]|quantity }}</td>
+                  <td>{{ tx["value_eur"]|money if tx["value_eur"] is not none else "—" }}</td>
+                  <td><span class="status-chip">{{ tx["status"] }}</span></td>
+                  <td><select class="category-select" data-transaction-id="{{ tx['id'] }}">
+                    {% for category in categories %}<option value="{{ category }}" {% if category == tx["display_category"] %}selected{% endif %}>{{ category }}</option>{% endfor %}
+                  </select></td>
+                </tr>
+              {% else %}
+                <tr><td class="empty-row" colspan="7">Aucune opération ne correspond à ces filtres.</td></tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <p class="history-note">La période affichée correspond à l’historique renvoyé par Coinbase. Si la date de début est postérieure à vos premières opérations, vérifiez les permissions de lecture des transactions et l’historique disponible dans votre compte Coinbase.</p>
+          <div class="pagination-bar">
+            <span>Page {{ current_page }} sur {{ transaction_pages }}</span>
+            <div>
+              {% if current_page > 1 %}<a class="button button-outline" href="{{ previous_url }}">← Précédente</a>{% else %}<button class="button button-outline" disabled>← Précédente</button>{% endif %}
+              {% if current_page < transaction_pages %}<a class="button button-outline" href="{{ next_url }}">Suivante →</a>{% else %}<button class="button button-outline" disabled>Suivante →</button>{% endif %}
+            </div>
+          </div>
+        </section>
+
+        <section class="tax-panel" id="tax">
+          <div class="tax-heading"><div><p class="eyebrow">REPÈRE FISCAL FRANÇAIS</p><h2>Calcul des cessions</h2></div><span class="tax-badge">{% if dashboard_data and dashboard_data.french_tax_complete %}Estimation{% else %}À compléter{% endif %}</span></div>
+          <p>Le calcul français des cessions d’actifs numériques s’effectue à l’échelle du portefeuille global, et non crypto par crypto. Il requiert la valeur de l’ensemble des actifs détenus à chaque cession, y compris ceux conservés hors Coinbase.</p>
+          <label class="check-row"><input type="checkbox" id="portfolio-complete" {% if complete %}checked{% endif %}><span>Coinbase contient l’intégralité de mon portefeuille crypto et l’historique importé est complet.</span></label>
+          <div class="tax-result">
+            <div><span>PLUS-VALUE IMPOSABLE ESTIMÉE</span><strong>{% if dashboard_data and dashboard_data.french_tax_gain_eur is not none %}{{ dashboard_data.french_tax_gain_eur|money }}{% else %}Non calculée{% endif %}</strong></div>
+            <small>{% if dashboard_data and dashboard_data.french_tax_reason %}{{ dashboard_data.french_tax_reason }}{% else %}Ajoutez l’intégralité de vos avoirs et historiques avant d’utiliser ce repère.{% endif %} Cours quotidiens indicatifs : ce résultat ne constitue pas un conseil fiscal ni une déclaration.</small>
+          </div>
+        </section>
+        <footer class="page-footer"><span>Atlas Crypto · Tableau de bord privé</span><span>Les performances sont indicatives et dépendent de la qualité des données importées.</span></footer>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script id="dashboard-data" type="application/json">{{ {"last_sync": last_sync, "connected": connected}|tojson }}</script>
+</body>
+</html>
