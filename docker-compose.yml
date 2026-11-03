@@ -1,0 +1,20 @@
+services:
+  web:
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - crypto-data:/app/data
+    restart: unless-stopped
+
+  sync:
+    build: .
+    env_file: .env
+    command: ["python", "sync_worker.py"]
+    volumes:
+      - crypto-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  crypto-data:
